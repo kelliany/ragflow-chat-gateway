@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 智能助手</title>
+    <style>
+        /* 简单的加载动画，提升体验 */
+        body { margin: 0; padding: 0; font-family: sans-serif; }
+        #loading {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: #666; font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+
+  <div id="loading">正在连接安全通道...</div>
+
+  <iframe id="float-btn"
+    style="position:fixed;bottom:20px;right:20px;width:100px;height:100px;border:none;background:transparent;z-index:9999;display:none"
+    frameborder="0" allow="microphone;camera">
+  </iframe>
+
+<script>
+// ==========================================
+// 🔑 核心占位符
+// Node.js 后端在读取这个文件时，会自动把下面这串字符替换成真正的 Token
+// ==========================================
+const CURRENT_TOKEN = "__INJECTED_TOKEN__"; 
+
+// 自动识别当前网关的地址 (例如 http://10.215.208.98:3000)
+const GATEWAY_ORIGIN = window.location.origin;
+
+async function initChat() {
+    // 简单检查一下 Token 是否被替换成功了
+    if (CURRENT_TOKEN === '__' + 'INJECTED_TOKEN' + '__') {
+        console.error('错误：Token 未注入，请勿直接打开 HTML 文件，必须通过 http://ip:3000/view 访问');
+        document.getElementById('loading').innerText = '配置错误：请通过网关访问';
+        return;
+    }
+
+    console.log('✅ 安全通道已建立');
+    document.getElementById('loading').style.display = 'none'; // 隐藏加载提示
+
+    // 1. 加载悬浮球
+    const btnIframe = document.getElementById('float-btn');
+    btnIframe.src = `${GATEWAY_ORIGIN}/next-chats/widget?key=agent-chat-button&token=${CURRENT_TOKEN}`;
+    btnIframe.style.display = 'block'; // 显示按钮
+}
+
+// 启动初始化
+initChat();
+
+// ==========================================
+// 2. 监听消息 (弹出大窗口)
+// ==========================================
+window.addEventListener('message', e => {
+  if (e.origin !== GATEWAY_ORIGIN) return;
+  
+  if (e.data.type === 'CREATE_CHAT_WINDOW') {
+    if (document.getElementById('chat-win')) return;
+    
+    // 使用注入的 Token 创建大窗口链接
+    const safeSrc = `${GATEWAY_ORIGIN}/next-chats/widget?key=agent-01&w=500px&h=600px&token=${CURRENT_TOKEN}`;
+    
+    // 动态提取宽度高度 (可选)
+    const urlObj = new URL(safeSrc);
+    const width = urlObj.searchParams.get('w') || '500px';
+    const height = urlObj.searchParams.get('h') || '600px';
+
+    const i = document.createElement('iframe');
+    i.id = 'chat-win';
+    i.src = safeSrc;
+    // 样式配置：右下角弹出，带阴影
+    i.style.cssText = `position:fixed;bottom:104px;right:24px;width:${width};height:${height};border:none;background:transparent;z-index:9998;display:none; box-shadow: 0 5px 20px rgba(0,0,0,0.2); border-radius: 8px; background-color: white;`;
+    
+    i.frameBorder = '0';
+    i.allow = 'microphone;camera';
+    document.body.appendChild(i);
+    
+  } else if (e.data.type === 'TOGGLE_CHAT') {
+    const w = document.getElementById('chat-win');
+    if (w) w.style.display = e.data.isOpen ? 'block' : 'none';
+  }
+});
+</script>
+</body>
+</html>

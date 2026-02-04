@@ -1,0 +1,16 @@
+# 依赖库
+node_modules/
+
+# 敏感配置文件 (极其重要)
+.env
+mappings.json
+
+# 临时文件与日志
+*.log
+npm-debug.log*
+.DS_Store
+
+# 如果你有本地测试用的打包文件
+dist/
+*.tar.gz
+*.zip
