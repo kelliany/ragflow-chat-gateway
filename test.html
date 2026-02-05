@@ -12,7 +12,7 @@
         input { padding: 8px; width: 300px; border: 1px solid #ccc; border-radius: 4px; }
         button { padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
         button:hover { background: #0056b3; }
-        /* 聊天按钮样式 */
+        /* 页面居中加载提示 */
         #loading {
             position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
             color: #666; font-size: 14px;
@@ -36,8 +36,7 @@
 
 <div id="statusBox" class="status"></div>
 
-<!-- 聊天按钮相关 HTML -->
-<div id="loading">正在连接安全通道...</div>
+<div id="loading">等待身份验证...</div>
 
 <iframe id="float-btn"
     style="position:fixed;bottom:20px;right:20px;width:100px;height:100px;border:none;background:transparent;z-index:9999;display:none"
@@ -45,32 +44,30 @@
 </iframe>
 
 <script>
-    // 核心 Token 变量
     let CURRENT_TOKEN = '';
-    
-    // 自动识别当前网关的地址
     const GATEWAY_ORIGIN = window.location.origin;
 
+    /**
+     * 步骤 1: 点击按钮换取 Token
+     */
     async function startTest() {
         const secret = document.getElementById('clientSecret').value;
-        const key = document.getElementById('agentKey').value;
         const statusBox = document.getElementById('statusBox');
         
         statusBox.className = 'status';
         statusBox.innerText = '正在向网关请求 Token...';
 
         try {
-            // 步骤 1: 请求网关获取 Token
             const response = await fetch(`/api/get-token?secret=${secret}`);
             const data = await response.json();
 
             if (data.success) {
                 statusBox.className = 'status success';
-                statusBox.innerText = `✅ Token 获取成功！有效期 8 小时。`;
+                statusBox.innerText = `✅ Token 获取成功！`;
                 
-                // 步骤 2: 保存 Token 并初始化聊天功能
+                // 成功获取 Token 后再开启后续逻辑
                 CURRENT_TOKEN = data.token;
-                initChat();
+                initChat(); 
             } else {
                 throw new Error(data.error || '获取 Token 失败');
             }
@@ -80,54 +77,78 @@
         }
     }
 
-    async function initChat() {
-        // 检查 Token 是否获取成功
+    /**
+     * 步骤 2: 初始化悬浮球
+     */
+    function initChat() {
+        if (!CURRENT_TOKEN) return;
+
+        console.log('✅ 安全通道已建立');
+        document.getElementById('loading').style.display = 'none';
+
+        // 将 Token 注入悬浮球 URL
+        const btnIframe = document.getElementById('float-btn');
+        btnIframe.src = `${GATEWAY_ORIGIN}/next-chats/widget?key=agent-chat-button&token=${CURRENT_TOKEN}`;
+        btnIframe.style.display = 'block'; 
+    }
+
+    /**
+     * 核心监听器：处理来自网关的所有消息
+     */
+    window.addEventListener('message', e => {
+        // 1. 来源验证
+        if (e.origin !== GATEWAY_ORIGIN) return;
+        
+        // 2. 状态锁：如果没有 Token（按钮没点），直接忽略所有消息
+        // 防止 Iframe 预加载脚本自动触发逻辑
         if (!CURRENT_TOKEN) {
-            console.error('错误：Token 未获取，请点击按钮换取 Token');
-            document.getElementById('loading').innerText = '配置错误：请先换取 Token';
+            console.warn('[OA系统] 拦截到未授权触发请求');
             return;
         }
 
-        console.log('✅ 安全通道已建立');
-        document.getElementById('loading').style.display = 'none'; // 隐藏加载提示
+        const chatWinId = 'chat-win';
+        const chatWin = document.getElementById(chatWinId);
 
-        // 加载悬浮球
-        const btnIframe = document.getElementById('float-btn');
-        btnIframe.src = `${GATEWAY_ORIGIN}/next-chats/widget?key=agent-chat-button&token=${CURRENT_TOKEN}`;
-        btnIframe.style.display = 'block'; // 显示按钮
-    }
-
-    // 监听消息 (弹出大窗口)
-    window.addEventListener('message', e => {
-        if (e.origin !== GATEWAY_ORIGIN) return;
+        // --- A. UI 参数自动同步 ---
         if (e.data.type === 'UI_CONFIG') {
-            // 接收来自网关配置的宽高，实现自动缩放
-            const w = document.getElementById('chat-win');
-            if (w) {
-                w.style.width = e.data.width;
-                w.style.height = e.data.height;
-                console.log(`✅ OA 系统已根据后端配置调整窗口: ${e.data.width}x${e.data.height}`);
+            if (chatWin) {
+                chatWin.style.width = e.data.width || '500px';
+                chatWin.style.height = e.data.height || '600px';
+                console.log(`✅ 已应用网关下发的 UI 配置: ${e.data.width}x${e.data.height}`);
             }
         }
+        
+        // --- B. 创建对话窗口 ---
         if (e.data.type === 'CREATE_CHAT_WINDOW') {
-            if (document.getElementById('chat-win')) return;
+            if (chatWin) return;
             
-    
-            const safeSrc = `${GATEWAY_ORIGIN}/next-chats/widget?key=agent-01&token=${CURRENT_TOKEN}`;
-    
+            // 定义前端预设尺寸（会由 proxy.js 记录并传给 RAGFlow）
+            const dynamicW = '400px'; 
+            const dynamicH = '900px';
+            const agentKey = document.getElementById('agentKey').value;
+
+            // 构建带有 width/height 和 token 的安全地址
+            const safeSrc = `${GATEWAY_ORIGIN}/next-chats/widget?key=agent-01&width=${dynamicW}&height=${dynamicH}&token=${CURRENT_TOKEN}`;
+            
             const i = document.createElement('iframe');
-            i.id = 'chat-win';
+            i.id = chatWinId;
             i.src = safeSrc;
-            // 样式配置：右下角弹出，带阴影
-            i.style.cssText = `position:fixed;bottom:104px;right:24px;width:0;height:0;border:none;background:transparent;z-index:9998;display:none; box-shadow: 0 5px 20px rgba(0,0,0,0.2); border-radius: 8px; background-color: white;`;
+            
+            // 初始样式设置
+            i.style.cssText = `
+                position:fixed; bottom:104px; right:24px;
+                width:${dynamicW}; height:${dynamicH};
+                border:none; background:white; z-index:9998; 
+                display:none; box-shadow: 0 5px 20px rgba(0,0,0,0.2); 
+                border-radius: 8px; transition: all 0.3s ease;
+            `;
             
             i.frameBorder = '0';
             i.allow = 'microphone;camera';
             document.body.appendChild(i);
-            
+
         } else if (e.data.type === 'TOGGLE_CHAT') {
-            const w = document.getElementById('chat-win');
-            if (w) w.style.display = e.data.isOpen ? 'block' : 'none';
+            if (chatWin) chatWin.style.display = e.data.isOpen ? 'block' : 'none';
         }
     });
 </script>
