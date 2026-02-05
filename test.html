@@ -100,23 +100,26 @@
     // 监听消息 (弹出大窗口)
     window.addEventListener('message', e => {
         if (e.origin !== GATEWAY_ORIGIN) return;
-        
+        if (e.data.type === 'UI_CONFIG') {
+            // 接收来自网关配置的宽高，实现自动缩放
+            const w = document.getElementById('chat-win');
+            if (w) {
+                w.style.width = e.data.width;
+                w.style.height = e.data.height;
+                console.log(`✅ OA 系统已根据后端配置调整窗口: ${e.data.width}x${e.data.height}`);
+            }
+        }
         if (e.data.type === 'CREATE_CHAT_WINDOW') {
             if (document.getElementById('chat-win')) return;
             
-            // 使用获取的 Token 创建大窗口链接
-            const safeSrc = `${GATEWAY_ORIGIN}/next-chats/widget?key=agent-01&w=500px&h=600px&token=${CURRENT_TOKEN}`;
-            
-            // 动态提取宽度高度
-            const urlObj = new URL(safeSrc);
-            const width = urlObj.searchParams.get('w') || '500px';
-            const height = urlObj.searchParams.get('h') || '600px';
-
+    
+            const safeSrc = `${GATEWAY_ORIGIN}/next-chats/widget?key=agent-01&token=${CURRENT_TOKEN}`;
+    
             const i = document.createElement('iframe');
             i.id = 'chat-win';
             i.src = safeSrc;
             // 样式配置：右下角弹出，带阴影
-            i.style.cssText = `position:fixed;bottom:104px;right:24px;width:${width};height:${height};border:none;background:transparent;z-index:9998;display:none; box-shadow: 0 5px 20px rgba(0,0,0,0.2); border-radius: 8px; background-color: white;`;
+            i.style.cssText = `position:fixed;bottom:104px;right:24px;width:0;height:0;border:none;background:transparent;z-index:9998;display:none; box-shadow: 0 5px 20px rgba(0,0,0,0.2); border-radius: 8px; background-color: white;`;
             
             i.frameBorder = '0';
             i.allow = 'microphone;camera';

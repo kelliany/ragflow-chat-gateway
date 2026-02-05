@@ -12,36 +12,48 @@ const axiosInstance = axios.create({
 async function handleRequest(req, res) {
   try {
     // ==========================================
-    // 1. 智能流式判断
+    // 1. 智能流式判断 (支持图片路径)
     // ==========================================
     const isApiRequest = req.path.includes('/api/') || req.path.includes('/completions') || req.path.includes('/session');
-    const currentResponseType = isApiRequest ? 'stream' : 'arraybuffer';
+    // 兼容所有可能的文档/图片路径判断
+    const isResourceRequest = req.path.includes('/document/') || req.path.includes('/v1/document/');
+    const currentResponseType = (isApiRequest || isResourceRequest) ? 'stream' : 'arraybuffer';
 
     let queryParams = '';
     let hiddenParams = {}; 
     
     // ==========================================
-    // 2. 参数处理逻辑
+    // 2. 参数处理逻辑 (保持原样)
     // ==========================================
     const agentKey = req.query.key;
     const mappings = config.chatMappings;
+    
+    // 🏆 核心：创建一个合并后的参数池，先放入当前请求的所有参数
+    let combinedParams = new URLSearchParams(req.query);
+    combinedParams.delete('token'); // 移除网关私有 token
 
     if (agentKey && mappings && mappings[agentKey]) {
-      const params = new URLSearchParams(mappings[agentKey]);
-      params.forEach((value, key) => { hiddenParams[key] = value; });
-      queryParams = mappings[agentKey];
-      // 这里的 Cookie 仅用于业务参数持久化，不用于身份验证
-      res.cookie('ragflow_params', queryParams, { httpOnly: true, maxAge: 3600000 });
+        // 🏆 核心：将 Mapping 里的参数合并进来
+        const mappedParams = new URLSearchParams(mappings[agentKey]);
+        mappedParams.forEach((value, key) => {
+            combinedParams.set(key, value); // 使用 set 确保 mapping 里的配置优先
+        });
+        
+        queryParams = combinedParams.toString();
+        // 将合并后的所有参数存入 hiddenParams 供 JS 使用
+        combinedParams.forEach((value, key) => { hiddenParams[key] = value; });
+        
+        res.cookie('ragflow_params', queryParams, { httpOnly: true, maxAge: 3600000 });
     } else {
-       const cookies = req.headers.cookie;
-       if (cookies && cookies.includes('ragflow_params')) {
-         const match = cookies.match(/ragflow_params=([^;]+)/);
-         if (match) {
-             queryParams = decodeURIComponent(match[1]);
-             const params = new URLSearchParams(queryParams);
-             params.forEach((value, key) => { hiddenParams[key] = value; });
-         }
-       }
+      const cookies = req.headers.cookie;
+      if (cookies && cookies.includes('ragflow_params')) {
+        const match = cookies.match(/ragflow_params=([^;]+)/);
+        if (match) {
+            queryParams = decodeURIComponent(match[1]);
+            const params = new URLSearchParams(queryParams);
+            params.forEach((value, key) => { hiddenParams[key] = value; });
+        }
+      }
     }
 
     // ==========================================
@@ -49,8 +61,7 @@ async function handleRequest(req, res) {
     // ==========================================
     let targetUrl = req.path; 
     let finalUrl = `${config.ragflow.baseUrl}${targetUrl}`;
-    console.log(`🚀 请求路径: ${finalUrl}`); // 👈 添加这一行
-    // 获取原始 query，但删除 token，避免传给 RAGFlow
+    
     const cleanQuery = { ...req.query };
     delete cleanQuery.token; 
 
@@ -65,7 +76,6 @@ async function handleRequest(req, res) {
     // 4. 构建 Header
     // ==========================================
     const proxyHeaders = { ...req.headers };
-    
     delete proxyHeaders['if-none-match']; 
     delete proxyHeaders['if-modified-since'];
     delete proxyHeaders['host']; 
@@ -87,30 +97,41 @@ async function handleRequest(req, res) {
     // ==========================================
     // 5. 执行请求与转发响应
     // ==========================================
-    
+    res.setHeader('Access-Control-Allow-Origin', '*');
 
-    // 复制响应头 (排除可能导致 iframe 无法显示的限制性 Header)
+    // 复制响应头
     Object.keys(response.headers).forEach(key => {
       const lowerKey = key.toLowerCase();
+      // 🚀 核心修改：必须排除 content-length，因为内容长度变了
       if (!['content-encoding', 'content-length', 'content-security-policy', 'x-frame-options'].includes(lowerKey)) {
         res.setHeader(key, response.headers[key]);
       }
     });
 
-    if (isApiRequest) {
+    if (isApiRequest || isResourceRequest) {
       res.status(response.status);
       response.data.pipe(res); 
       return; 
     }
 
     // ==========================================
-    // 6. HTML 注入 (JS/CSS Patch)
+    // 6. HTML 注入与多路径地址替换
     // ==========================================
     const contentType = response.headers['content-type'] || '';
     if (contentType.includes('text/html')) {
       let htmlContent = response.data.toString('utf8');
       
-      // 注入 JS Patch：重写参数解析逻辑，确保 iframe 能拿到 hiddenParams
+      const gatewayHost = req.get('host'); 
+      const ragflowHost = config.ragflow.baseUrl.replace(/^https?:\/\//, ''); 
+      
+      // 🚀 核心增加：增强版正则，覆盖 /v1/document 和 /document
+      // 匹配 http://10.215.208.98/v1/document 或 http://10.215.208.98/document
+      const addressRegex = new RegExp(`http://${ragflowHost}(/v1)?/document`, 'g');
+      htmlContent = htmlContent.replace(addressRegex, `http://${gatewayHost}$1/document`);
+
+      console.log(`[Gateway] 已替换 HTML 中的后端链接为网关链接: ${gatewayHost}`);
+
+      // 你的原生注入脚本 (保持原样)
       const injectionScript = `
         <script>
           (function() {
@@ -118,6 +139,14 @@ async function handleRequest(req, res) {
               console.log('[Gateway] Auth & System patches active...');
               const HIDDEN_PARAMS = ${JSON.stringify(hiddenParams)};
               
+              // 🚀 新增：通知父窗口调整宽高
+              if (window.parent !== window) {
+                  window.parent.postMessage({
+                      type: 'UI_CONFIG',
+                      width: HIDDEN_PARAMS.width || '500px',
+                      height: HIDDEN_PARAMS.height || '600px'
+                  }, '*');
+              }
               // 兼容性修正：解决 touch 事件被动监听问题
               const originalAddEventListener = EventTarget.prototype.addEventListener;
               EventTarget.prototype.addEventListener = function(type, listener, options) {
@@ -166,8 +195,7 @@ async function handleRequest(req, res) {
       res.removeHeader('X-Frame-Options');
       res.send(htmlContent);
     } else {
-      res.status(response.status);
-      res.send(response.data);
+      res.status(response.status).send(response.data);
     }
 
   } catch (error) {
