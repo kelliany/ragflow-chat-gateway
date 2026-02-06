@@ -71,10 +71,10 @@ app.get('/api/get-token', (req, res) => {
       system: 'bestv-tvcms' 
     }, 
     JWT_SECRET, 
-    { expiresIn: '30s' } // 👈 修正：必须与你的日志描述一致
+    { expiresIn: '8h' } // 👈 修正：必须与你的日志描述一致
   );
 
-  console.log(`  ✅ [Token成功] 已为用户 ${userIdFromReq || '访客'} 签发 30s Token`);
+  console.log(`  ✅ [Token成功] 已为用户 ${userIdFromReq || '访客'} 签发 8 小时 Token`);
   res.json({ success: true, token: token });
 });
 
@@ -126,7 +126,7 @@ const checkAuth = (req, res, next) => {
         path: '/', 
         sameSite: 'None', // 👈 跨域 iframe 必须设为 None
         secure: true,     // 👈 None 模式下必须设为 true (需确保是 https 或本地测试关闭)
-        maxAge:  60 * 1000 
+        maxAge: 8 * 60 * 60 * 1000 // 8小时有效期，与Token一致
       });
     }
 
