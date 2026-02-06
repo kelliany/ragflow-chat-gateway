@@ -3,7 +3,7 @@ const path = require('path');
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
-const cors = require('cors'); // 👈 建议引入 cors 处理跨域
+const cors = require('cors'); 
 const proxyRoutes = require('../routes/proxy'); 
 
 const app = express();
@@ -12,14 +12,46 @@ const port = 3030;
 const JWT_SECRET = process.env.JWT_SECRET || 'bestv-jwt-secret-2026';
 const RAGFLOW_URL = process.env.RAGFLOW_BASE_URL || 'http://10.215.208.98';
 
-// ==========================================
-// 全局配置
-// ==========================================
-app.use(cors()); // 允许宿主系统跨域访问
+app.use(cors()); 
 app.use(cookieParser());
 
 // ==========================================
-// 1. 获取 Token 的接口 (放在校验中间件之前)
+// 辅助函数：生成 HTML
+// ==========================================
+function getAuthErrorHtml(reason, code) {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Auth Error ${code}</title>
+    </head>
+    <body>
+      <div style="text-align:center; padding:50px;">
+        <h1>${code} Authentication Failed</h1>
+        <p>${reason}</p>
+        <p>Redirecting to login...</p>
+      </div>
+      <script>
+        try {
+          console.log('Gateway: Auth failed (${code}), notifying parent window...');
+          // 发送消息给父页面
+          window.parent.postMessage({ 
+            type: 'AUTH_ERROR', 
+            message: '${reason}',
+            code: ${code}
+          }, '*'); 
+        } catch (e) {
+          console.error('PostMessage failed:', e);
+        }
+      </script>
+    </body>
+    </html>
+  `;
+}
+
+// ==========================================
+//  获取 Token 的接口 (放在校验中间件之前)
 // ==========================================
 app.get('/api/get-token', (req, res) => {
   const CLIENT_SECRET = process.env.CLIENT_SECRET || 'bestvwin2026';
@@ -52,39 +84,42 @@ app.get('/test-oa', (req, res) => {
 });
 
 // ==========================================
-// 2. 核心鉴权中间件 (保安)
+// 核心鉴权中间件
 // ==========================================
 const checkAuth = (req, res, next) => {
-  // 1. 静态资源（js/css/图片）依然直接放行，不影响渲染
+  // 1. 静态资源放行
   const isStatic = /\.(js|css|map|svg|png|jpg|jpeg|woff2|ico|json)$/.test(req.path);
   if (isStatic) return next();
 
-  // 2. 尝试从各种渠道获取你的网关 Token
+  // 2. 获取 Token
   const tokenFromUrl = req.query.token;
   const tokenFromCookie = req.cookies['auth_token'];
-  // 🏆 新增：从 Referer URL 中提取 Token (解决 inputs 接口报错的关键)
   let tokenFromReferer = null;
   if (req.headers.referer) {
-    const refererUrl = new URL(req.headers.referer);
-    tokenFromReferer = refererUrl.searchParams.get('token');
+    try {
+      const refererUrl = new URL(req.headers.referer);
+      tokenFromReferer = refererUrl.searchParams.get('token');
+    } catch (e) { }
   }
 
   const finalToken = tokenFromUrl || tokenFromCookie || tokenFromReferer;
 
-  // 3. 开始严格验证
+  // 3. 验证逻辑
+  
+  // 👉 情况 A: 没 Token -> 返回 401 状态码 + HTML
   if (!finalToken) {
     console.log(` ⛔ [拒绝] 无有效 Token: ${req.path}`);
-    return res.status(401).send('<h1>401 Unauthorized</h1><p>未授权访问</p>');
+    return res.status(401).send(getAuthErrorHtml('No Token Provided', 401));
   }
 
   jwt.verify(finalToken, JWT_SECRET, (err, decoded) => {
+    // 👉 情况 B: Token 错/过期 -> 返回 403 状态码 + HTML
     if (err) {
-      console.log(` ❌ [拒绝] Token 验证失败: ${req.path}`);
-      return res.status(403).send('Token Invalid');
+      console.log(` ❌ [拒绝] Token 验证失败: ${req.path} (${err.message})`);
+      return res.status(403).send(getAuthErrorHtml(`Token Invalid: ${err.message}`, 403));
     }
 
-    // 4. 验证通过！
-    // 如果是第一次 URL 访问，补种 Cookie (增加 sameSite: 'None' 和 Secure 解决跨域丢失)
+    // 验证通过
     if (tokenFromUrl) {
       res.cookie('auth_token', tokenFromUrl, { 
         httpOnly: true, 

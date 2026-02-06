@@ -98,7 +98,38 @@
     window.addEventListener('message', e => {
         // 1. 来源验证
         if (e.origin !== GATEWAY_ORIGIN) return;
-        
+        // 🔥 打印大法：看看 e.data 到底是个啥
+        console.log('收到消息 -> e.data:', e.data);
+        console.log('收到消息 -> e.data.type:', e.data ? e.data.type : 'undefined')
+        // ==========================================
+        // 🚨 新增：优先处理鉴权失败消息
+        // ==========================================
+        if (e.data.type === 'AUTH_ERROR') {
+            console.error('⛔ [OA端] 收到鉴权失败信号:', e.data);
+
+            // 1. 界面提示
+            const statusBox = document.getElementById('statusBox');
+            statusBox.className = 'status error';
+            statusBox.style.display = 'block';
+            statusBox.innerHTML = `
+                <strong>会话已过期 (Code ${e.data.code})</strong><br>
+                原因: ${e.data.message}<br>
+                请重新点击按钮获取新 Token
+            `;
+
+            // 2. 销毁聊天窗口 (强制下线)
+            if (chatWin) {
+                chatWin.remove(); // 直接移除 iframe
+                console.log('🧹 已销毁聊天窗口');
+            }
+
+            // 3. 清空本地 Token，防止后续操作
+            CURRENT_TOKEN = ''; 
+            
+            // 4. 甚至可以模拟跳转登录页
+            // window.location.href = '/login';
+            return; 
+        }
         // 2. 状态锁：如果没有 Token（按钮没点），直接忽略所有消息
         // 防止 Iframe 预加载脚本自动触发逻辑
         if (!CURRENT_TOKEN) {

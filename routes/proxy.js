@@ -19,28 +19,23 @@ async function handleRequest(req, res) {
     let hiddenParams = {}; 
     
     // ==========================================
-    // 2. 参数处理逻辑 (优化：参数合并模式)
+    // 2. 参数处理逻辑
     // ==========================================
     const agentKey = req.query.key;
     const mappings = config.chatMappings;
     
-    // 🏆 核心：创建一个合并后的参数池，初始放入前端请求的所有参数
     let combinedParams = new URLSearchParams(req.query);
-    combinedParams.delete('token'); // 移除网关私有 token
+    combinedParams.delete('token'); 
 
     if (agentKey && mappings && mappings[agentKey]) {
-        // 🏆 核心：将 Mapping 里的业务配置合并进来
         const mappedParams = new URLSearchParams(mappings[agentKey]);
         mappedParams.forEach((value, key) => {
-            // 使用 set。如果 Mapping 里有 width，会覆盖前端的；
-            // 只有当 Mapping 里的值不为空时，才覆盖前端传来的参数
           if (value) {
               combinedParams.set(key, value);
           }
         });
         
         queryParams = combinedParams.toString();
-        // 将最终合并的所有参数存入 hiddenParams 供前端 JS 使用
         combinedParams.forEach((value, key) => { hiddenParams[key] = value; });
         
         res.cookie('ragflow_params', queryParams, { httpOnly: true, maxAge: 3600000 });
@@ -57,12 +52,11 @@ async function handleRequest(req, res) {
     }
 
     // ==========================================
-    // 3. 构建 URL (使用合并后的 queryParams)
+    // 3. 构建 URL
     // ==========================================
     let targetUrl = req.path; 
     let finalUrl = `${config.ragflow.baseUrl}${targetUrl}`;
     
-    // 这里的逻辑修改：如果存在合并后的参数，则优先使用
     if (queryParams) {
       finalUrl += (finalUrl.includes('?') ? '&' : '?') + queryParams;
     } else {
@@ -114,7 +108,7 @@ async function handleRequest(req, res) {
     }
 
     // ==========================================
-    // 6. HTML 注入与多路径地址替换
+    // 6. HTML 注入 (🔥 核心修改区域)
     // ==========================================
     if (response.headers['content-type']?.includes('text/html')) {
       let htmlContent = response.data.toString('utf8');
@@ -124,14 +118,61 @@ async function handleRequest(req, res) {
       const addressRegex = new RegExp(`http://${ragflowHost}(/v1)?/document`, 'g');
       htmlContent = htmlContent.replace(addressRegex, `http://${gatewayHost}$1/document`);
       
+      // 👇👇👇 这里的 injectionScript 增加了 401/403 拦截逻辑 👇👇👇
       const injectionScript = `
         <script>
           (function() {
             try {
-              console.log('[Gateway] Auth & System patches active...');
+              console.log('[Gateway] 🛡️ Security & Interceptor patches active...');
+              
+              // =========================================================
+              // 🔥 1. 注入 401/403 间谍监听 (Spy Script)
+              // =========================================================
+              
+              // A. 拦截 Fetch 请求
+              const originalFetch = window.fetch;
+              window.fetch = async function(...args) {
+                  const response = await originalFetch(...args);
+                  if (response.status === 401 || response.status === 403) {
+                      console.log('🚨 [Gateway Spy] Fetch 捕获到鉴权失效 (' + response.status + ')');
+                      window.parent.postMessage({ 
+                          type: 'AUTH_ERROR', 
+                          code: response.status,
+                          message: 'Session Expired (Fetch)' 
+                      }, '*');
+                  }
+                  return response;
+              };
+
+              // B. 拦截 XHR 请求
+              const originalOpen = XMLHttpRequest.prototype.open;
+              const originalSend = XMLHttpRequest.prototype.send;
+              
+              XMLHttpRequest.prototype.open = function(method, url) {
+                  this._url = url;
+                  originalOpen.apply(this, arguments);
+              };
+
+              XMLHttpRequest.prototype.send = function() {
+                  this.addEventListener('load', function() {
+                      if (this.status === 401 || this.status === 403) {
+                          console.log('🚨 [Gateway Spy] XHR 捕获到鉴权失效 (' + this.status + ')');
+                          window.parent.postMessage({ 
+                              type: 'AUTH_ERROR', 
+                              code: this.status, 
+                              message: 'Session Expired (XHR)' 
+                          }, '*');
+                      }
+                  });
+                  originalSend.apply(this, arguments);
+              };
+
+              // =========================================================
+              // 🔄 2. 原有的参数隐藏与 UI 配置逻辑
+              // =========================================================
               const HIDDEN_PARAMS = ${JSON.stringify(hiddenParams)};
               console.log('[Gateway] Final Hidden Params:', HIDDEN_PARAMS);
-              // 🚀 核心逻辑：通知父窗口调整宽高 (w/h 均来自合并后的参数)
+              
               if (window.parent !== window) {
                   window.parent.postMessage({
                       type: 'UI_CONFIG',
@@ -162,6 +203,7 @@ async function handleRequest(req, res) {
                  if (HIDDEN_PARAMS[name]) return [HIDDEN_PARAMS[name]];
                  return originalGetAll.apply(this, arguments);
               };
+
             } catch (e) { console.error('[Gateway] Patch error:', e); }
           })();
         </script>
@@ -174,6 +216,7 @@ async function handleRequest(req, res) {
         htmlContent = htmlContent.replace('</head>', `${cssInjection}</head>`);
       }
 
+      // CSP 设置，允许 eval 和 inline script
       res.setHeader('Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src * 'unsafe-inline'; img-src * data: blob:; frame-src *; style-src * 'unsafe-inline';");
       res.removeHeader('X-Frame-Options');
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
